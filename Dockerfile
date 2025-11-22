@@ -34,7 +34,7 @@ RUN apt-get update -y \
      default-jre default-jdk \
      python3 python3-pip python3-distutils python-is-python3 \
      perl ruby openssl libssl-dev \
-     cpio lz4 unzip zip \
+     cpio lz4 jq unzip zip \
      vim openssh-client \
      locales \
   && locale-gen "en_US.UTF-8" \
