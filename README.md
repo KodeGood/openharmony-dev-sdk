@@ -3,13 +3,13 @@
 To build the Dockerfile:
 
 ```bash
-docker build -t openharmony-dev-sdk:latest .
+./openharmony-dev-create.sh
 ```
 
-To run the container:
+To run and enter the container:
 
 ```bash
-docker run -it -v $(pwd):/home/openharmony -v "$HOME/.gitconfig:/root/.gitconfig:ro" openharmony-dev-sdk:latest
+./openharmony-dev-enter.sh
 ```
 ```
 
