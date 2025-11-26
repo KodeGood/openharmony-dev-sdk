@@ -21,9 +21,10 @@ GROUP_ID="$(id -g)"
 HOSTNAME_FQDN="$(hostname -f 2>/dev/null || hostname)"
 CONTAINER_HOSTNAME="${NAME}.${HOSTNAME_FQDN}"
 
-source "${OPENHARMONY_DEV_SDK}/third-party/bash-argsparse/argsparse.sh"
+OHOS_REGISTRY="${OHOS_REGISTRY:-https://repo.harmonyos.com/npm/}"
+APPEND_NPMRC="${APPEND_NPMRC:-0}"
 
-argsparse_use_option with-prebuilts "Enable mapping of the openharmony tools prebuilts folder (used when building full OpenHarmony system images)"
+source "${OPENHARMONY_DEV_SDK}/third-party/bash-argsparse/argsparse.sh"
 
 process_command_line_arguments() {
     argsparse_allow_no_argument "true"
@@ -66,7 +67,27 @@ propagate_mounts() {
     fi
 }
 
-prepare_prebuilts_mounts() {
+ensure_scope_registry() {
+    local npmrc_path="$1"
+
+    # Append only when not disabled
+    if [[ "$APPEND_NPMRC" == "0" ]]; then
+        # Create file if missing
+        if [[ ! -f "$npmrc_path" ]]; then
+            echo "[INFO] Creating $npmrc_path"
+            mkdir -p "$(dirname "$npmrc_path")"
+            touch "$npmrc_path"
+        fi
+
+        # Insert @ohos:registry only if not already present
+        if ! grep -qE '^[[:space:]]*@ohos:registry=' "$npmrc_path"; then
+            echo "[INFO] Adding @ohos registry to $npmrc_path"
+            echo "@ohos:registry=${OHOS_REGISTRY}" >> "$npmrc_path"
+        fi
+    fi
+}
+
+prepare_sdk_mounts() {
     local -n out_mounts=$1
 
     local mappings=(
@@ -77,7 +98,7 @@ prepare_prebuilts_mounts() {
     )
 
     for dir in "${mappings[@]}"; do
-        local host_path="${WORKDIR}/${dir}"
+        local host_path="${WORKDIR}/.sdk/${dir}"
         local container_path="${CONTAINER_HOME}/${dir}"
         if [[ ! -d "${host_path}" ]]; then
             echo "[INFO] Creating host directory ${host_path}"
@@ -90,12 +111,10 @@ prepare_prebuilts_mounts() {
         out_mounts+=(-v "${host_path}:${container_path}")
     done
 
-    local npmrc_host="${WORKDIR}/.npmrc"
+    local npmrc_host="${WORKDIR}/.sdk/.npmrc"
     local npmrc_container="${CONTAINER_HOME}/.npmrc"
-    if [[ ! -f "${npmrc_host}" ]]; then
-        echo "[INFO] Creating empty ${npmrc_host}"
-        touch "${npmrc_host}"
-    fi
+
+    ensure_scope_registry "$npmrc_host"
 
     if [[ "$(stat -c '%u' "${npmrc_host}")" -ne "${USER_ID}" ]]; then
         echo "[INFO] Fixing ownership for ${npmrc_host}"
@@ -150,9 +169,8 @@ run() {
         exec setpriv --reuid=${USER_ID} --regid=${GROUP_ID} --init-groups env HOME=${CONTAINER_HOME} USER=${USER_NAME} bash --login
     "
 
-    if argsparse_is_option_set "with-prebuilts"; then
-        prepare_prebuilts_mounts docker_mounts
-    fi
+    prepare_sdk_mounts docker_mounts
+
     local -a docker_cmd=(bash -lc "${set_home_ownership_and_switch}")
 
     docker run "${docker_opts[@]}" "${docker_mounts[@]}" "${IMAGE}" "${docker_cmd[@]}"

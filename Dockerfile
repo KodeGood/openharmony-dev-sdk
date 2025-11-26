@@ -56,7 +56,7 @@ RUN pip3 install -i https://repo.huaweicloud.com/repository/pypi/simple --truste
   && pip3 install --upgrade --ignore-installed six esdk-obs-python
 
 # Node.js 20 LTS + HPM CLI (OpenHarmony)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
   && apt-get update -y \
   && apt-get install -y --no-install-recommends nodejs \
   && npm install -g @ohos/hpm-cli --registry https://mirrors.huaweicloud.com/repository/npm/ \
