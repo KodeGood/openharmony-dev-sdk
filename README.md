@@ -11,5 +11,3 @@ To run and enter the container:
 ```bash
 ./openharmony-dev-enter.sh
 ```
-```
-
