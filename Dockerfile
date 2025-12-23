@@ -15,13 +15,12 @@ RUN apt-get update -y \
      ca-certificates apt-utils curl wget gnupg git git-lfs \
      bison flex bc build-essential make ccache m4 \
      binutils binutils-dev gperf \
-     gcc g++ gcc-multilib g++-multilib \
+     gcc g++ \
      gcc-arm-none-eabi \
-     libc6-dev-i386 libstdc++6 libdwarf-dev \
+     libc6-dev libstdc++6 libdwarf-dev \
      libelf-dev libffi-dev libfl-dev \
      libx11-dev libgl1-mesa-dev x11proto-core-dev \
      libxml2-dev xsltproc \
-     lib32z1-dev lib32ncurses5-dev \
      libtinfo5 libtinfo-dev libncurses5 libncurses5-dev libncursesw5 \
      zlib1g-dev libexpat1-dev \
      device-tree-compiler libfdt-dev \

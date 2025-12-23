@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_relpath="${BASH_SOURCE[0]:-"$0"}"
-openharmony_dev_sdk_directory="$(readlink -f "$(dirname "$script_relpath")")"
+openharmony_dev_sdk_directory="$(cd "$(dirname "$script_relpath")" && pwd -P)"
 
 OPENHARMONY_DEV_SDK="$openharmony_dev_sdk_directory"
 IMAGE="${OPENHARMONY_DOCKER_IMAGE:-openharmony-dev-sdk:latest}"
@@ -25,6 +25,19 @@ OHOS_REGISTRY="${OHOS_REGISTRY:-https://repo.harmonyos.com/npm/}"
 APPEND_NPMRC="${APPEND_NPMRC:-0}"
 
 source "${OPENHARMONY_DEV_SDK}/third-party/bash-argsparse/argsparse.sh"
+
+# ------------------------------------------------------------
+# Portable stat helpers (Linux + macOS)
+# ------------------------------------------------------------
+stat_uid() {
+    if stat -c '%u' "$1" >/dev/null 2>&1; then
+        stat -c '%u' "$1"
+    else
+        stat -f '%u' "$1"
+    fi
+}
+
+# ------------------------------------------------------------
 
 process_command_line_arguments() {
     argsparse_allow_no_argument "true"
@@ -58,9 +71,9 @@ propagate_mounts() {
         out_args+=(-v "${HOME}/.gitconfig:${CONTAINER_HOME}/.gitconfig:ro")
     fi
 
-    out_args+=(-v ${OPENHARMONY_DEV_SDK}/.bashrc:${CONTAINER_HOME}/.bashrc)
-    out_args+=(-v ${OPENHARMONY_DEV_SDK}/.bash_logout:${CONTAINER_HOME}/.bash_logout)
-    out_args+=(-v ${OPENHARMONY_DEV_SDK}/.profile:${CONTAINER_HOME}/.profile)
+    out_args+=(-v "${OPENHARMONY_DEV_SDK}/.bashrc:${CONTAINER_HOME}/.bashrc")
+    out_args+=(-v "${OPENHARMONY_DEV_SDK}/.bash_logout:${CONTAINER_HOME}/.bash_logout")
+    out_args+=(-v "${OPENHARMONY_DEV_SDK}/.profile:${CONTAINER_HOME}/.profile")
 
     if [[ -n "${XDG_RUNTIME_DIR-}" && -d "${XDG_RUNTIME_DIR}" ]]; then
         out_args+=(-v "${XDG_RUNTIME_DIR}:${XDG_RUNTIME_DIR}")
@@ -70,16 +83,10 @@ propagate_mounts() {
 ensure_scope_registry() {
     local npmrc_path="$1"
 
-    # Append only when not disabled
     if [[ "$APPEND_NPMRC" == "0" ]]; then
-        # Create file if missing
-        if [[ ! -f "$npmrc_path" ]]; then
-            echo "[INFO] Creating $npmrc_path"
-            mkdir -p "$(dirname "$npmrc_path")"
-            touch "$npmrc_path"
-        fi
+        mkdir -p "$(dirname "$npmrc_path")"
+        touch "$npmrc_path"
 
-        # Insert @ohos:registry only if not already present
         if ! grep -qE '^[[:space:]]*@ohos:registry=' "$npmrc_path"; then
             echo "[INFO] Adding @ohos registry to $npmrc_path"
             echo "@ohos:registry=${OHOS_REGISTRY}" >> "$npmrc_path"
@@ -100,14 +107,14 @@ prepare_sdk_mounts() {
     for dir in "${mappings[@]}"; do
         local host_path="${WORKDIR}/.sdk/${dir}"
         local container_path="${CONTAINER_HOME}/${dir}"
-        if [[ ! -d "${host_path}" ]]; then
-            echo "[INFO] Creating host directory ${host_path}"
-            mkdir -p "${host_path}"
-        fi
-        if [[ "$(stat -c '%u' "${host_path}")" -ne "${USER_ID}" ]]; then
+
+        mkdir -p "${host_path}"
+
+        if [[ "$(stat_uid "${host_path}")" -ne "${USER_ID}" ]]; then
             echo "[INFO] Fixing ownership for ${host_path}"
             chown -R "${USER_ID}:${GROUP_ID}" "${host_path}"
         fi
+
         out_mounts+=(-v "${host_path}:${container_path}")
     done
 
@@ -116,17 +123,17 @@ prepare_sdk_mounts() {
 
     ensure_scope_registry "$npmrc_host"
 
-    if [[ "$(stat -c '%u' "${npmrc_host}")" -ne "${USER_ID}" ]]; then
+    if [[ "$(stat_uid "${npmrc_host}")" -ne "${USER_ID}" ]]; then
         echo "[INFO] Fixing ownership for ${npmrc_host}"
         chown "${USER_ID}:${GROUP_ID}" "${npmrc_host}"
     fi
+
     out_mounts+=(-v "${npmrc_host}:${npmrc_container}")
 }
 
 run() {
     process_command_line_arguments "${@}"
 
-    # Run as root first, then drop privileges inside container
     local -a docker_opts=(
         --rm
         --tty
@@ -143,37 +150,29 @@ run() {
 
     local -a docker_mounts=()
     propagate_mounts docker_mounts
+    prepare_sdk_mounts docker_mounts
 
-    # Script to fix ownership and drop privileges to host user
     local set_home_ownership_and_switch="
         if [ -d '${CONTAINER_HOME}' ]; then
-            OWNER_ID=\$(stat -c '%u' '${CONTAINER_HOME}' 2>/dev/null || echo 0)
+            OWNER_ID=\$(stat -c '%u' '${CONTAINER_HOME}' 2>/dev/null || stat -f '%u' '${CONTAINER_HOME}')
             if [ \"\$OWNER_ID\" -ne ${USER_ID} ]; then
-                echo '[INFO] Setting ownership of ${CONTAINER_HOME} for UID ${USER_ID}...';
-                chown ${USER_ID}:${GROUP_ID} '${CONTAINER_HOME}' || echo '[WARN] Failed to chown ${CONTAINER_HOME}';
+                echo '[INFO] Setting ownership of ${CONTAINER_HOME} for UID ${USER_ID}...'
+                chown ${USER_ID}:${GROUP_ID} '${CONTAINER_HOME}' || true
             fi
         fi
 
         if ! grep -q '^${GROUP_NAME}:' /etc/group; then
-            echo '[INFO] Adding group ${GROUP_NAME} (GID=${GROUP_ID}) to /etc/group...'
             echo '${GROUP_NAME}:x:${GROUP_ID}:' >> /etc/group
         fi
 
         if ! grep -q '^${USER_NAME}:' /etc/passwd; then
-          echo '[INFO] Adding ${USER_NAME} to /etc/passwd...';
-          echo '${USER_NAME}:x:${USER_ID}:${GROUP_ID}:${USER_NAME}:/home/openharmony:/bin/bash' >> /etc/passwd
+            echo '${USER_NAME}:x:${USER_ID}:${GROUP_ID}:${USER_NAME}:${CONTAINER_HOME}:/bin/bash' >> /etc/passwd
         fi
 
-        echo '[INFO] Switching to UID ${USER_ID}:${GROUP_ID}...';
-        export HOME=${CONTAINER_HOME}
         exec setpriv --reuid=${USER_ID} --regid=${GROUP_ID} --init-groups env HOME=${CONTAINER_HOME} USER=${USER_NAME} bash --login
     "
 
-    prepare_sdk_mounts docker_mounts
-
-    local -a docker_cmd=(bash -lc "${set_home_ownership_and_switch}")
-
-    docker run "${docker_opts[@]}" "${docker_mounts[@]}" "${IMAGE}" "${docker_cmd[@]}"
+    docker run "${docker_opts[@]}" "${docker_mounts[@]}" "${IMAGE}" bash -lc "${set_home_ownership_and_switch}"
 }
 
 run "$@"
